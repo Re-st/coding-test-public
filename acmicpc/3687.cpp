@@ -38,7 +38,7 @@ int main() {
                 digit = 0;
             }
             else {
-                minStr += "26";
+                minStr += "20";
                 digit -= 2;
             }
             break;
