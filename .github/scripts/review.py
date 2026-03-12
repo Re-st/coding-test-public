@@ -1,8 +1,12 @@
 import os
 import sys
-from openai import OpenAI
+from pathlib import Path
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+from google import genai
+
+STATE_FILE = Path(".github/.ai_review_bootstrap_done")
+
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
 PROMPT_CPP = """
@@ -40,7 +44,6 @@ PROMPT_CPP = """
 ## 리팩토링 조언
 ## 한 줄 평
 """
-
 
 PROMPT_PY = """
 # 네이버 코딩테스트 코드 리뷰 지침 (Python)
@@ -87,96 +90,100 @@ PROMPT_PY = """
 """
 
 
-def read_readme(folder):
-
+def read_readme(folder: str) -> str:
     path = os.path.join(folder, "README.md")
-
     if not os.path.exists(path):
         return ""
-
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
-def choose_prompt(file):
-
+def choose_prompt(file: str) -> str:
     ext = os.path.splitext(file)[1]
-
     if ext in [".cpp", ".cc", ".cxx"]:
         return PROMPT_CPP
-
     if ext == ".py":
         return PROMPT_PY
-
     return PROMPT_CPP
 
 
-def review(code, readme, file):
-
+def review(code: str, readme: str, file: str) -> str:
     prompt = choose_prompt(file)
-
     full_prompt = (
-        prompt +
-        "\n\n[문제 설명]\n" +
-        readme +
-        "\n\n[풀이 코드]\n" +
-        code
+        prompt
+        + "\n\n[문제 설명]\n"
+        + readme
+        + "\n\n[풀이 코드]\n"
+        + code
     )
 
-    r = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "코딩테스트 코드 리뷰어"},
-            {"role": "user", "content": full_prompt}
-        ]
+    resp = client.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=full_prompt,
     )
+    return resp.text or ""
 
-    return r.choices[0].message.content
 
-
-def find_unreviewed_files():
-
-    targets = []
-
+def find_unreviewed_files() -> list[str]:
+    targets: list[str] = []
     for root, _, files in os.walk("."):
-
         for f in files:
-
             if not f.endswith((".cpp", ".cc", ".cxx", ".py")):
                 continue
-
             src = os.path.join(root, f)
             review_path = os.path.join(root, "REVIEW.md")
-
             if not os.path.exists(review_path):
                 targets.append(src)
-
     return targets
 
 
-# push된 파일
-push_files = []
-if len(sys.argv) > 1:
-    push_files = sys.argv[1].split()
+def parse_args(argv: list[str]) -> tuple[bool, list[str]]:
+    bootstrap = False
+    files: list[str] = []
 
-# 기존 리뷰 안된 파일
-unreviewed = find_unreviewed_files()
+    for a in argv[1:]:
+        if a == "--bootstrap":
+            bootstrap = True
+        else:
+            files.extend(a.split())
 
-targets = list(set(push_files + unreviewed))
+    files = sorted(set(files))
+    return bootstrap, files
 
-for f in targets:
 
-    with open(f) as fp:
-        code = fp.read()
+def main() -> None:
+    bootstrap, push_files = parse_args(sys.argv)
 
-    folder = os.path.dirname(f)
+    if bootstrap:
+        if STATE_FILE.exists():
+            print("Bootstrap already done; skipping.")
+            return
+        targets = find_unreviewed_files()
+    else:
+        targets = push_files
 
-    readme = read_readme(folder)
+    if not targets:
+        print("No targets.")
+        return
 
-    result = review(code, readme, f)
+    for f in targets:
+        with open(f, encoding="utf-8") as fp:
+            code = fp.read()
 
-    out = os.path.join(folder, "REVIEW.md")
+        folder = os.path.dirname(f)
+        readme = read_readme(folder)
+        result = review(code, readme, f)
 
-    with open(out, "w") as w:
-        w.write("# AI 코드 리뷰\n\n")
-        w.write(result)
+        out = os.path.join(folder, "REVIEW.md")
+        with open(out, "w", encoding="utf-8") as w:
+            w.write("# AI 코드 리뷰\n\n")
+            w.write(result)
+
+    if bootstrap:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text("done\n", encoding="utf-8")
+        print(f"Wrote state file: {STATE_FILE}")
+
+
+if __name__ == "__main__":
+    main()
