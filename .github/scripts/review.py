@@ -11,30 +11,28 @@ PROMPT_CPP = """
 본 리뷰는 삼성 SW 역량테스트 기준으로 수행한다.
 
 ## 1. 시간 / 공간 복잡도 분석
-- README.md 문제 설명에서 N 범위를 파악하라.
-- N 최대일 때 1초 내 실행 가능한지 분석하라.
-- O(N^3) 이상이면 경고하라.
-- 불필요하게 큰 배열이나 낭비되는 다차원 배열 지적.
+- README.md에서 N 범위를 파악
+- N 최대일 때 1초 내 실행 가능 여부
+- O(N^3) 이상이면 경고
+- 불필요한 대형 배열 지적
 
 ## 2. 구현 최적화
-- std::sort / std::unique / memset 등으로 줄일 수 있는 코드 제안
+- std::sort / memset 등으로 줄일 수 있는 코드 제안
 - STL 남용 시 정적 배열 기반 구현 제안
-- 상하좌우 탐색은 dx, dy 배열 사용 여부 확인
+- dx dy 배열 기반 탐색 여부 확인
 
 ## 3. 엣지 케이스
 - N=1
-- 좌표 0 / N-1
+- 좌표 경계 (0 / N-1)
 - 초기화 누락
-- 테스트케이스 반복 시 전역 변수 문제
+- 테스트케이스 반복 문제
 
-## 4. 리팩토링 조언
-- 더 단순한 알고리즘 가능 여부
+## 4. 리팩토링
+- 더 단순한 알고리즘 제안
 - 가독성 문제
 - 디버깅 위험 코드
 
-반드시 **한국어 Markdown**으로 작성.
-
-출력 구조:
+한국어 Markdown으로 작성
 
 ## 시간 / 공간 복잡도
 ## 구현 최적화
@@ -45,49 +43,40 @@ PROMPT_CPP = """
 
 
 PROMPT_PY = """
-# 네이버 코딩테스트 코드 리뷰 지침서 (Python)
+# 네이버 코딩테스트 코드 리뷰 지침 (Python)
 
-네이버 코딩테스트 기준으로 코드를 리뷰한다.
+네이버 코딩테스트 기준으로 리뷰한다.
 
-## 1. 시간복잡도 및 입력 크기 분석
-- README.md에서 N 범위를 파악
-- Python 기준 1초 처리 가능 여부 분석
-- O(N^2) 이상이면 경고 (특히 N ≥ 10^5)
-- 불필요한 반복문 / 중첩 루프 지적
+## 1. 시간복잡도
+- README에서 N 범위 파악
+- Python 기준 시간 초과 위험 분석
+- 불필요한 중첩 루프 지적
 
 ## 2. Pythonic 구현
-다음 개선 여부 검토
+다음 활용 여부 검토
 
 - list comprehension
 - enumerate
 - zip
-- collections (deque / Counter / defaultdict)
+- collections
 - heapq
-- itertools
-
-불필요한 반복문이나 장황한 구현은 Pythonic하게 단순화 제안.
 
 ## 3. 자료구조 선택
-다음 문제 지적
-
-- list 대신 set/dict가 유리한 경우
-- queue 구현 시 deque 대신 list 사용
-- heap 대신 sort 반복 사용
+- list vs set/dict
+- deque 대신 list 사용 여부
+- heap 대신 반복 sort 여부
 
 ## 4. 엣지 케이스
 - 빈 입력
-- 길이 1 입력
-- 음수 / 큰 값
+- 길이 1
 - index error 가능성
 
-## 5. 네이버 스타일 가독성
-- 변수명 의미 부족
+## 5. 가독성
+- 변수명
 - 불필요한 중첩
 - 함수 분리 가능성
 
-반드시 **한국어 Markdown**으로 작성.
-
-출력 구조:
+한국어 Markdown으로 작성
 
 ## 시간 복잡도
 ## Pythonic 개선
@@ -116,7 +105,7 @@ def choose_prompt(file):
     if ext in [".cpp", ".cc", ".cxx"]:
         return PROMPT_CPP
 
-    if ext in [".py"]:
+    if ext == ".py":
         return PROMPT_PY
 
     return PROMPT_CPP
@@ -137,7 +126,7 @@ def review(code, readme, file):
     r = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "코딩테스트 코드 리뷰어다."},
+            {"role": "system", "content": "코딩테스트 코드 리뷰어"},
             {"role": "user", "content": full_prompt}
         ]
     )
@@ -145,9 +134,37 @@ def review(code, readme, file):
     return r.choices[0].message.content
 
 
-files = sys.argv[1].split()
+def find_unreviewed_files():
 
-for f in files:
+    targets = []
+
+    for root, _, files in os.walk("."):
+
+        for f in files:
+
+            if not f.endswith((".cpp", ".cc", ".cxx", ".py")):
+                continue
+
+            src = os.path.join(root, f)
+            review_path = os.path.join(root, "REVIEW.md")
+
+            if not os.path.exists(review_path):
+                targets.append(src)
+
+    return targets
+
+
+# push된 파일
+push_files = []
+if len(sys.argv) > 1:
+    push_files = sys.argv[1].split()
+
+# 기존 리뷰 안된 파일
+unreviewed = find_unreviewed_files()
+
+targets = list(set(push_files + unreviewed))
+
+for f in targets:
 
     with open(f) as fp:
         code = fp.read()
