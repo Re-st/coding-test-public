@@ -6,20 +6,26 @@ on:
       - '**.cc'
       - '**.cpp'
       - '**.py'
+      - '.github/scripts/review.py'
+      - '.github/workflows/ai-review.yml'
 
 permissions:
   contents: write
 
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   review:
     runs-on: ubuntu-latest
-
     steps:
       - name: checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: true
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: setup python
         uses: actions/setup-python@v5
@@ -28,7 +34,7 @@ jobs:
 
       - name: install deps
         run: |
-          pip install openai
+          pip install -U google-genai
 
       - name: skip if auto review commit
         run: |
@@ -38,23 +44,41 @@ jobs:
             exit 0
           fi
 
-      - name: get changed files
+      - name: compute changed files (push only)
         id: changed
         run: |
           echo "FILES=$(git diff --name-only HEAD^ HEAD | grep -E '\.(cc|cpp|py)$' | xargs)" >> $GITHUB_OUTPUT
 
-      - name: run review
-        if: steps.changed.outputs.FILES != ''
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: decide bootstrap
+        id: bootstrap
         run: |
-          python .github/scripts/review.py "${{ steps.changed.outputs.FILES }}"      
+          if [[ -f ".github/.ai_review_bootstrap_done" ]]; then
+            echo "DO_BOOTSTRAP=false" >> $GITHUB_OUTPUT
+          else
+            echo "DO_BOOTSTRAP=true" >> $GITHUB_OUTPUT
+          fi
 
-      - name: commit md
-        if: steps.changed.outputs.FILES != ''
+      - name: run bootstrap (one-time)
+        if: steps.bootstrap.outputs.DO_BOOTSTRAP == 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python .github/scripts/review.py --bootstrap
+
+      - name: run review (push files only)
+        if: steps.bootstrap.outputs.DO_BOOTSTRAP != 'true' && steps.changed.outputs.FILES != ''
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python .github/scripts/review.py "${{ steps.changed.outputs.FILES }}"
+
+      - name: commit md (rebase then push)
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
+
           git add .
           git commit -m "auto ai review" || echo "no changes"
+
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
