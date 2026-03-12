@@ -27,6 +27,14 @@ jobs:
         run: |
           pip install openai
 
+      - name: skip if auto review commit
+        run: |
+          msg=$(git log -1 --pretty=%B)
+          if [[ "$msg" == "auto ai review" ]]; then
+            echo "skip"
+            exit 0
+          fi
+
       - name: get changed files
         id: changed
         run: |
