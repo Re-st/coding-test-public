@@ -1,0 +1,47 @@
+name: AI Review
+
+on:
+  push:
+    paths:
+      - '**.cc'
+      - '**.cpp'
+      - '**.py'
+
+permissions:
+  contents: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: install deps
+        run: |
+          pip install openai
+
+      - name: get changed files
+        id: changed
+        run: |
+          echo "FILES=$(git diff --name-only HEAD^ HEAD | grep -E '\.(cc|cpp|py)$' | xargs)" >> $GITHUB_OUTPUT
+
+      - name: run review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python .github/scripts/review.py "${{ steps.changed.outputs.FILES }}"
+
+      - name: commit md
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git diff --cached --quiet || git commit -m "auto ai review"
+          git push
