@@ -57,8 +57,11 @@ jobs:
 
       - name: compute changed files (push only)
         id: changed
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
         run: |
-          echo "FILES=$(git diff --name-only HEAD^ HEAD | grep -E '\.(cc|cpp|py)$' | xargs)" >> $GITHUB_OUTPUT
+          echo "FILES=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" | grep -E '\.(cc|cpp|py)$' | xargs)" >> $GITHUB_OUTPUT
 
       - name: decide bootstrap
         id: bootstrap
