@@ -104,30 +104,44 @@ def find_unreviewed_files() -> list[str]:
     return targets
 
 
-def parse_args(argv: list[str]) -> tuple[bool, list[str]]:
+def list_models() -> None:
+    print("[ai-review] listing models...")
+    for m in client.models.list():
+        name = getattr(m, "name", None)
+        # name이 보통 'models/xxx' 형태로 옴
+        print(f"- {name}")
+
+def parse_args(argv: list[str]) -> tuple[bool, bool, list[str]]:
     """
     Usage:
       python .github/scripts/review.py --bootstrap
       python .github/scripts/review.py "<space separated changed files>"
     """
     bootstrap = False
+    list_only = False
     files: list[str] = []
 
     for a in argv[1:]:
         if a == "--bootstrap":
             bootstrap = True
+        elif a == "--list-models":
+            list_only = True
         else:
             files.extend(a.split())
 
     files = sorted(set(files))
-    return bootstrap, files
+    return bootstrap, list_only, files
 
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 def main() -> None:
-    bootstrap, push_files = parse_args(sys.argv)
+    bootstrap, list_only, push_files = parse_args(sys.argv)
+
+    if list_only:
+        list_models()
+        return
 
     if bootstrap:
         if STATE_FILE.exists():

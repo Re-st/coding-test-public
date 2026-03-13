@@ -36,6 +36,12 @@ jobs:
         run: |
           pip install -U google-genai
 
+      - name: list gemini models (debug)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python .github/scripts/review.py --list-models
+
       - name: skip if auto review commit
         run: |
           msg=$(git log -1 --pretty=%B)
