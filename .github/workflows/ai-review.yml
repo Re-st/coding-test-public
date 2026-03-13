@@ -50,6 +50,11 @@ jobs:
             exit 0
           fi
 
+      - name: sync with remote (prevent add/add conflicts)
+        run: |
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}" || (git rebase --abort && exit 1)
+
       - name: compute changed files (push only)
         id: changed
         run: |
@@ -78,13 +83,27 @@ jobs:
         run: |
           python .github/scripts/review.py "${{ steps.changed.outputs.FILES }}"
 
-      - name: commit md (rebase then push)
+      - name: commit md (push with retry)
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
           git add .
-          git commit -m "auto ai review" || echo "no changes"
+          # Exit early if nothing to commit; remote was already synced in the earlier sync step.
+          git commit -m "auto ai review" || { echo "no changes"; exit 0; }
 
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
+          for attempt in 1 2 3; do
+            if git push origin "${GITHUB_REF_NAME}"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "push failed after 3 attempts"
+              exit 1
+            fi
+            echo "push rejected (attempt $attempt/3), rebasing onto latest remote..."
+            git fetch origin "${GITHUB_REF_NAME}"
+            # -X theirs keeps the locally generated REVIEW.md when add/add conflicts occur
+            # (in rebase, 'theirs' refers to the commits being replayed, i.e. our local content).
+            # This is safe because the only files that can conflict here are auto-generated reviews.
+            git rebase "origin/${GITHUB_REF_NAME}" -X theirs || (git rebase --abort && exit 1)
+          done
