@@ -7,7 +7,7 @@ from google import genai
 # -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
-MODEL_NAME = "gemini-3-pro"
+MODEL_NAME = "models/gemini-2.5-pro"
 STATE_FILE = Path(".github/.ai_review_bootstrap_done")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root
