@@ -4,92 +4,57 @@ from pathlib import Path
 
 from google import genai
 
+# -----------------------------------------------------------------------------
+# Config
+# -----------------------------------------------------------------------------
+MODEL_NAME = "gemini-3-pro"
 STATE_FILE = Path(".github/.ai_review_bootstrap_done")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root
+PROMPTS_DIR = REPO_ROOT / ".github" / "prompts"
+
+PROMPT_COMMON_PATH = PROMPTS_DIR / "common.md"
+PROMPT_CPP_PATH = PROMPTS_DIR / "lang" / "cpp.md"
+PROMPT_PY_PATH = PROMPTS_DIR / "lang" / "python.md"
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-PROMPT_CPP = """
-# 삼성 SW 역량테스트 합격 지침서 (C++)
-
-본 리뷰는 삼성 SW 역량테스트 기준으로 수행한다.
-
-## 1. 시간 / 공간 복잡도 분석
-- README.md에서 N 범위를 파악
-- N 최대일 때 1초 내 실행 가능 여부
-- O(N^3) 이상이면 경고
-- 불필요한 대형 배열 지적
-
-## 2. 구현 최적화
-- std::sort / memset 등으로 줄일 수 있는 코드 제안
-- STL 남용 시 정적 배열 기반 구현 제안
-- dx dy 배열 기반 탐색 여부 확인
-
-## 3. 엣지 케이스
-- N=1
-- 좌표 경계 (0 / N-1)
-- 초기화 누락
-- 테스트케이스 반복 문제
-
-## 4. 리팩토링
-- 더 단순한 알고리즘 제안
-- 가독성 문제
-- 디버깅 위험 코드
-
-한국어 Markdown으로 작성
-
-## 시간 / 공간 복잡도
-## 구현 최적화
-## 엣지 케이스
-## 리팩토링 조언
-## 한 줄 평
-"""
-
-PROMPT_PY = """
-# 네이버 코딩테스트 코드 리뷰 지침 (Python)
-
-네이버 코딩테스트 기준으로 리뷰한다.
-
-## 1. 시간복잡도
-- README에서 N 범위 파악
-- Python 기준 시간 초과 위험 분석
-- 불필요한 중첩 루프 지적
-
-## 2. Pythonic 구현
-다음 활용 여부 검토
-
-- list comprehension
-- enumerate
-- zip
-- collections
-- heapq
-
-## 3. 자료구조 선택
-- list vs set/dict
-- deque 대신 list 사용 여부
-- heap 대신 반복 sort 여부
-
-## 4. 엣지 케이스
-- 빈 입력
-- 길이 1
-- index error 가능성
-
-## 5. 가독성
-- 변수명
-- 불필요한 중첩
-- 함수 분리 가능성
-
-한국어 Markdown으로 작성
-
-## 시간 복잡도
-## Pythonic 개선
-## 자료구조 선택
-## 엣지 케이스
-## 리팩토링 조언
-## 한 줄 평
-"""
+# -----------------------------------------------------------------------------
+# Prompt loading
+# -----------------------------------------------------------------------------
+def load_text(path: Path) -> str:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Prompt file not found: {path}\n"
+            f"Expected prompts:\n"
+            f"- {PROMPT_COMMON_PATH}\n"
+            f"- {PROMPT_CPP_PATH}\n"
+            f"- {PROMPT_PY_PATH}\n"
+        )
+    return path.read_text(encoding="utf-8")
 
 
+PROMPT_COMMON = load_text(PROMPT_COMMON_PATH)
+PROMPT_CPP = load_text(PROMPT_CPP_PATH)
+PROMPT_PY = load_text(PROMPT_PY_PATH)
+
+
+def build_prompt_for(file_path: str) -> str:
+    ext = Path(file_path).suffix.lower()
+
+    if ext in [".cpp", ".cc", ".cxx"]:
+        return PROMPT_COMMON + "\n\n" + PROMPT_CPP
+
+    if ext == ".py":
+        return PROMPT_COMMON + "\n\n" + PROMPT_PY
+
+    return PROMPT_COMMON
+
+
+# -----------------------------------------------------------------------------
+# IO helpers
+# -----------------------------------------------------------------------------
 def read_readme(folder: str) -> str:
     path = os.path.join(folder, "README.md")
     if not os.path.exists(path):
@@ -98,17 +63,12 @@ def read_readme(folder: str) -> str:
         return f.read()
 
 
-def choose_prompt(file: str) -> str:
-    ext = os.path.splitext(file)[1]
-    if ext in [".cpp", ".cc", ".cxx"]:
-        return PROMPT_CPP
-    if ext == ".py":
-        return PROMPT_PY
-    return PROMPT_CPP
+# -----------------------------------------------------------------------------
+# Gemini review
+# -----------------------------------------------------------------------------
+def review(code: str, readme: str, file_path: str) -> str:
+    prompt = build_prompt_for(file_path)
 
-
-def review(code: str, readme: str, file: str) -> str:
-    prompt = choose_prompt(file)
     full_prompt = (
         prompt
         + "\n\n[문제 설명]\n"
@@ -118,26 +78,38 @@ def review(code: str, readme: str, file: str) -> str:
     )
 
     resp = client.models.generate_content(
-        model="gemini-1.5-flash",
+        model=MODEL_NAME,
         contents=full_prompt,
     )
     return resp.text or ""
 
 
+# -----------------------------------------------------------------------------
+# Target selection
+# -----------------------------------------------------------------------------
 def find_unreviewed_files() -> list[str]:
     targets: list[str] = []
+
     for root, _, files in os.walk("."):
         for f in files:
             if not f.endswith((".cpp", ".cc", ".cxx", ".py")):
                 continue
+
             src = os.path.join(root, f)
             review_path = os.path.join(root, "REVIEW.md")
+
             if not os.path.exists(review_path):
                 targets.append(src)
+
     return targets
 
 
 def parse_args(argv: list[str]) -> tuple[bool, list[str]]:
+    """
+    Usage:
+      python .github/scripts/review.py --bootstrap
+      python .github/scripts/review.py "<space separated changed files>"
+    """
     bootstrap = False
     files: list[str] = []
 
@@ -151,6 +123,9 @@ def parse_args(argv: list[str]) -> tuple[bool, list[str]]:
     return bootstrap, files
 
 
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 def main() -> None:
     bootstrap, push_files = parse_args(sys.argv)
 
@@ -166,17 +141,23 @@ def main() -> None:
         print("No targets.")
         return
 
+    print(f"[ai-review] model: {MODEL_NAME}")
+    print(f"[ai-review] targets: {len(targets)} file(s)")
+
     for f in targets:
         with open(f, encoding="utf-8") as fp:
             code = fp.read()
 
         folder = os.path.dirname(f)
         readme = read_readme(folder)
+
         result = review(code, readme, f)
 
         out = os.path.join(folder, "REVIEW.md")
         with open(out, "w", encoding="utf-8") as w:
             w.write("# AI 코드 리뷰\n\n")
+            w.write(f"- Model: `{MODEL_NAME}`\n")
+            w.write(f"- Source: `{f}`\n\n")
             w.write(result)
 
     if bootstrap:
