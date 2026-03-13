@@ -1,5 +1,7 @@
 import os
+import random
 import sys
+import time
 from pathlib import Path
 
 from google import genai
@@ -8,6 +10,15 @@ from google import genai
 # Config
 # -----------------------------------------------------------------------------
 MODEL_NAME = "models/gemini-2.5-pro"
+
+# Bootstrap(초기 일괄 리뷰)에서 한 번에 처리할 파일 수 제한
+MAX_BOOTSTRAP_FILES = 15
+
+# 재시도 설정
+MAX_RETRIES = 6                  # 총 시도 횟수
+BACKOFF_BASE_SECONDS = 2.0       # 2,4,8,16...
+BACKOFF_JITTER_SECONDS = 0.5     # 랜덤 지터
+
 STATE_FILE = Path(".github/.ai_review_bootstrap_done")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root
@@ -64,8 +75,35 @@ def read_readme(folder: str) -> str:
 
 
 # -----------------------------------------------------------------------------
-# Gemini review
+# Gemini call with retry/backoff
 # -----------------------------------------------------------------------------
+def generate_with_retry(model: str, contents: str) -> str:
+    last_err: Exception | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=contents,
+            )
+            return resp.text or ""
+        except Exception as e:
+            last_err = e
+
+            # 지수 백오프 + 지터
+            if attempt < MAX_RETRIES:
+                sleep_s = (BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))) + random.uniform(
+                    0, BACKOFF_JITTER_SECONDS
+                )
+                print(f"[ai-review] request failed (attempt {attempt}/{MAX_RETRIES}): {e}")
+                print(f"[ai-review] sleeping {sleep_s:.2f}s then retry...")
+                time.sleep(sleep_s)
+            else:
+                break
+
+    raise last_err if last_err else RuntimeError("generate_with_retry failed")
+
+
 def review(code: str, readme: str, file_path: str) -> str:
     prompt = build_prompt_for(file_path)
 
@@ -77,11 +115,7 @@ def review(code: str, readme: str, file_path: str) -> str:
         + code
     )
 
-    resp = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=full_prompt,
-    )
-    return resp.text or ""
+    return generate_with_retry(MODEL_NAME, full_prompt)
 
 
 # -----------------------------------------------------------------------------
@@ -101,63 +135,56 @@ def find_unreviewed_files() -> list[str]:
             if not os.path.exists(review_path):
                 targets.append(src)
 
-    return targets
+    return sorted(targets)
 
 
-def list_models() -> None:
-    print("[ai-review] listing models...")
-    for m in client.models.list():
-        name = getattr(m, "name", None)
-        # name이 보통 'models/xxx' 형태로 옴
-        print(f"- {name}")
-
-def parse_args(argv: list[str]) -> tuple[bool, bool, list[str]]:
+def parse_args(argv: list[str]) -> tuple[bool, list[str]]:
     """
     Usage:
       python .github/scripts/review.py --bootstrap
       python .github/scripts/review.py "<space separated changed files>"
     """
     bootstrap = False
-    list_only = False
     files: list[str] = []
 
     for a in argv[1:]:
         if a == "--bootstrap":
             bootstrap = True
-        elif a == "--list-models":
-            list_only = True
         else:
             files.extend(a.split())
 
     files = sorted(set(files))
-    return bootstrap, list_only, files
+    return bootstrap, files
 
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 def main() -> None:
-    bootstrap, list_only, push_files = parse_args(sys.argv)
-
-    if list_only:
-        list_models()
-        return
+    bootstrap, push_files = parse_args(sys.argv)
 
     if bootstrap:
         if STATE_FILE.exists():
-            print("Bootstrap already done; skipping.")
+            print("[ai-review] Bootstrap already done; skipping.")
             return
-        targets = find_unreviewed_files()
+        targets_all = find_unreviewed_files()
+        targets = targets_all[:MAX_BOOTSTRAP_FILES]
+        remaining = len(targets_all) - len(targets)
     else:
         targets = push_files
+        remaining = 0
 
     if not targets:
-        print("No targets.")
+        print("[ai-review] No targets.")
         return
 
     print(f"[ai-review] model: {MODEL_NAME}")
     print(f"[ai-review] targets: {len(targets)} file(s)")
+    if bootstrap:
+        print(f"[ai-review] bootstrap remaining after this batch: {remaining}")
 
+    # 처리 중 일부가 실패해도 다음 파일로 계속 가려면 try/except로 감싸고,
+    # 다만 CI 실패 여부는 정책 선택인데, 여기서는 "하나라도 실패하면 실패"로 둔다.
     for f in targets:
         with open(f, encoding="utf-8") as fp:
             code = fp.read()
@@ -174,10 +201,16 @@ def main() -> None:
             w.write(f"- Source: `{f}`\n\n")
             w.write(result)
 
+    # bootstrap이 완전히 끝났을 때만 상태파일 생성
     if bootstrap:
-        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text("done\n", encoding="utf-8")
-        print(f"Wrote state file: {STATE_FILE}")
+        if remaining <= 0:
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATE_FILE.write_text("done\n", encoding="utf-8")
+            print(f"[ai-review] Wrote state file: {STATE_FILE}")
+        else:
+            print("[ai-review] Bootstrap not finished yet; state file not written.")
+
+    print("[ai-review] Done.")
 
 
 if __name__ == "__main__":
