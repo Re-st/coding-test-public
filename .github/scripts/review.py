@@ -110,6 +110,20 @@ def review(code: str, readme: str, file_path: str) -> str:
     return generate_with_retry(MODEL_NAME, full_prompt)
 
 
+def extract_review_example(md: str) -> str | None:
+    marker = "```REVIEW_EXAMPLE"
+    start = md.find(marker)
+    if start == -1:
+        return None
+    start = md.find("\n", start)
+    if start == -1:
+        return None
+    end = md.find("```", start + 1)
+    if end == -1:
+        return None
+    return md[start + 1 : end].strip() or None
+
+
 # -----------------------------------------------------------------------------
 # Target selection
 # -----------------------------------------------------------------------------
@@ -187,6 +201,7 @@ def main() -> None:
         folder = os.path.dirname(f)
         readme = read_readme(folder)
         result = review(code, readme, f)
+        example = extract_review_example(result)
 
         out = os.path.join(folder, "REVIEW.md")
         with open(out, "w", encoding="utf-8") as w:
@@ -194,6 +209,11 @@ def main() -> None:
             w.write(f"- Model: `{MODEL_NAME}`\n")
             w.write(f"- Source: `{f}`\n\n")
             w.write(result)
+
+        if example:
+            example_path = os.path.join(folder, "REVIEW_EXAMPLE.md")
+            with open(example_path, "w", encoding="utf-8") as ew:
+                ew.write(example)
 
     if bootstrap:
         if remaining <= 0:
