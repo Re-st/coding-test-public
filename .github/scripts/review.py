@@ -129,7 +129,10 @@ def extract_review_example(md: str) -> str | None:
 # -----------------------------------------------------------------------------
 def find_unreviewed_files() -> list[str]:
     targets: list[str] = []
-    for root, _, files in os.walk("."):
+    for root, dirs, files in os.walk("."):
+        # Skip all hidden directories (starting with '.') so os.walk won't recurse into them.
+        # This excludes .git, .github, and any other dot-prefixed directories.
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
         for f in files:
             if not f.endswith((".cpp", ".cc", ".cxx", ".py")):
                 continue
@@ -145,19 +148,32 @@ def parse_args(argv: list[str]) -> tuple[bool, bool, list[str]]:
     Returns:
       bootstrap: whether to run bootstrap
       list_only: whether to print model list and exit
-      files: push-changed files (space separated)
+      files: push-changed files
     """
     bootstrap = False
     list_only = False
     files: list[str] = []
+    files_from: str | None = None
 
-    for a in argv[1:]:
+    i = 1
+    while i < len(argv):
+        a = argv[i]
         if a == "--bootstrap":
             bootstrap = True
         elif a == "--list-models":
             list_only = True
+        elif a == "--files-from":
+            i += 1
+            files_from = argv[i]
+        elif a.startswith("--files-from="):
+            files_from = a[len("--files-from="):]
         else:
             files.extend(a.split())
+        i += 1
+
+    if files_from is not None:
+        with open(files_from, encoding="utf-8") as fh:
+            files.extend(line.rstrip("\n") for line in fh if line.rstrip("\n"))
 
     files = sorted(set(files))
     return bootstrap, list_only, files

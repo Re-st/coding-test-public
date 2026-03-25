@@ -42,14 +42,6 @@ jobs:
         run: |
           python .github/scripts/review.py --list-models
 
-      - name: skip if auto review commit
-        run: |
-          msg=$(git log -1 --pretty=%B)
-          if [[ "$msg" == "auto ai review" ]]; then
-            echo "skip"
-            exit 0
-          fi
-
       - name: sync with remote (prevent add/add conflicts)
         run: |
           git fetch origin "${GITHUB_REF_NAME}"
@@ -61,7 +53,22 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
         run: |
-          echo "FILES=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" | grep -E '\.(cc|cpp|py)$' | xargs)" >> $GITHUB_OUTPUT
+          # BEFORE_SHA is all-zeros on the very first push or a force-push; skip diff in that case.
+          if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "HAS_FILES=false" >> "$GITHUB_OUTPUT"
+          else
+            git -c core.quotepath=false diff --name-only "$BEFORE_SHA" "$AFTER_SHA" \
+              | grep -E '\.(cc|cpp|py)$' \
+              > "$RUNNER_TEMP/changed_files.txt"
+            grep_rc=$?
+            # grep exits 0 (matches found) or 1 (no matches); anything else is an error.
+            [[ $grep_rc -le 1 ]] || exit $grep_rc
+            if [[ -s "$RUNNER_TEMP/changed_files.txt" ]]; then
+              echo "HAS_FILES=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "HAS_FILES=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
       - name: decide bootstrap
         id: bootstrap
@@ -80,11 +87,11 @@ jobs:
           python .github/scripts/review.py --bootstrap
 
       - name: run review (push files only)
-        if: steps.bootstrap.outputs.DO_BOOTSTRAP != 'true' && steps.changed.outputs.FILES != ''
+        if: steps.bootstrap.outputs.DO_BOOTSTRAP != 'true' && steps.changed.outputs.HAS_FILES == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python .github/scripts/review.py "${{ steps.changed.outputs.FILES }}"
+          python .github/scripts/review.py --files-from "$RUNNER_TEMP/changed_files.txt"
 
       - name: commit md (push with retry)
         run: |
